@@ -1,5 +1,8 @@
 import cats.*
+import cats.implicits.*
 import cats.effect.*
+import BlueZ.UUID
+import scala.concurrent.duration.FiniteDuration
 
 extension [A, F[_]](ra: Resource[F, A])
   def useInContext[B](f: A ?=> F[B])(using F: MonadCancelThrow[F]): F[B] =
@@ -7,6 +10,7 @@ extension [A, F[_]](ra: Resource[F, A])
 
 trait BlueZ[F[_]]:
   val devices: F[Seq[Device]]
+  def scanForDevices(during: FiniteDuration): F[Seq[Device]] 
 
   /** The base type for things that do not have meaning outside of the device
     */
@@ -15,9 +19,10 @@ trait BlueZ[F[_]]:
   type Characteristic <: DeviceBound { type T }
   type Device <: DeviceBound
   type Service <: DeviceBound
-  // extension (dev: Device)
-  //   def getService: F[Service { type Con = dev.Con }]
-  //   def connection[A](f: dev.Con ?=> F[A]): F[A]
+  extension (dev: Device)
+    def name: F[String]
+    def services: F[Seq[Service { type Con = dev.Con }]]
+    def connected[A](f: dev.Con ?=> F[A]): F[A]
   // extension (srv: Service)
   //   def getCharacteristic
   //       : F[Characteristic { type Con = srv.Con; type T = Int }]
@@ -35,6 +40,9 @@ trait BlueZ[F[_]]:
   //     }
   //   }
 
+
+
+
 object BlueZ:
   import com.github.hypfvieh.bluetooth
   import bluetooth.wrapper.*
@@ -42,6 +50,11 @@ object BlueZ:
   import cats.implicits.*
   import cats.effect.implicits.*
   import scala.jdk.CollectionConverters.*
+  opaque type UUID = String
+  object UUID:
+    def apply(s: String): Option[UUID] = util.Try(java.util.UUID.fromString(s).toString).toOption
+    given Eq[UUID] = Eq.fromUniversalEquals
+    given Show[UUID] = s => s"BUUID($s)"
 
   def resource[F[_]](using F: Sync[F]): Resource[F, BlueZ[F]] =
     Resource
@@ -50,55 +63,20 @@ object BlueZ:
       )
       .map(dm =>
         new BlueZ[F]:
+
+          extension (dev: Device)
+            override def name = F.interruptible(dev.getName)
+            override def services: F[Seq[Service {type Con = dev.Con}]] = 
+              F.interruptible(dev.getGattServices.asScala.toSeq.asInstanceOf)
+            override def connected[A](f: (dev.Con) ?=> F[A]): F[A] = ???
+
           val devices: F[Seq[Device]] =
             F.interruptible(dm.getDevices.asScala.toSeq.asInstanceOf)
+          def scanForDevices(during: FiniteDuration): F[Seq[Device]] = F.interruptible {
+            dm.scanForBluetoothDevices(during.toMillis.toInt).asScala.toSeq.asInstanceOf[Seq[Device]]
+          }
 
           type Device = BluetoothDevice & DeviceBound
           type Service = BluetoothGattService & DeviceBound
           type Characteristic = BluetoothGattCharacteristic & DeviceBound & {type T}
       )
-
-// object BlueZ:
-//   transparent inline def apply[F[_]](using b: BlueZ[F]) = b
-
-//   type Device <: {
-//     type Service <: GATTService; type Con <: Connection;
-//     type C <: Characteristic
-//   }
-//   type GATTService <: { type C <: Characteristic }
-//   type Characteristic <: { type T }
-//   type Connection <: { type C <: Characteristic }
-//   type BID[T] = java.util.UUID // TODO: support short and string BIDs
-
-//   // TODO: bind characteristics to devices
-
-// end BlueZ
-
-// trait Microbit:
-//   import BlueZ.*
-//   import java.util.UUID
-//   val ledTextServie: BID[GATTService] =
-//     UUID.fromString("e95dd91d-251d-470a-a062-fa1922dfa9a8")
-
-// trait BlueZ[F[_]]:
-//   import BlueZ.*
-
-//   val devices: F[Seq[Device]]
-//   extension (dev: Device)
-//     def name: F[String]
-//     def rssi: F[Short]
-//     def gattServices: F[Seq[dev.Service { type C = dev.C }]]
-//     def serviceByBID(
-//         bid: BID[GATTService]
-//     ): F[Option[dev.Service { type C = dev.C }]]
-//     def isConnected: F[Boolean]
-//     def run[A](f: Connection { type C = dev.C } ?=> A): F[A]
-//   extension (srv: GATTService)
-//     def characteristics: F[Seq[srv.C]]
-//     def characteristicByBID(bid: BID[Characteristic]): F[Option[srv.C]]
-
-//   extension (char: Characteristic)
-//     def read(using con: Connection { type C >: char.type }): F[char.T]
-//     def write(using con: Connection { type C = char.type })(
-//         data: char.T
-//     ): F[Unit]
