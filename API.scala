@@ -1,33 +1,62 @@
 import cats.*
 import cats.effect.*
-import scala.annotation.implicitNotFound
 
-trait Tst[F[_]]:
+extension [A, F[_]](ra: Resource[F, A])
+  def useInContext[B](f: A ?=> F[B])(using F: MonadCancelThrow[F]): F[B] =
+    ra.use(a => f(using a))
 
-  type DeviceBound = {type Con}
+trait BlueZ[F[_]]:
+  val devices: F[Seq[Device]]
 
-  type Characteristic <: DeviceBound{
-    type T
-  }
+  /** The base type for things that do not have meaning outside of the device
+    */
+  type DeviceBound = { type Con }
+
+  type Characteristic <: DeviceBound { type T }
   type Device <: DeviceBound
   type Service <: DeviceBound
-  extension (dev: Device)
-    def getService: F[Service { type Con = dev.Con }]
-    def run[A](f: dev.Con ?=> F[A]): F[A]
-  extension (srv: Service)
-    def getCharacteristic
-        : F[Characteristic { type Con = srv.Con; type T = Int }]
+  // extension (dev: Device)
+  //   def getService: F[Service { type Con = dev.Con }]
+  //   def connection[A](f: dev.Con ?=> F[A]): F[A]
+  // extension (srv: Service)
+  //   def getCharacteristic
+  //       : F[Characteristic { type Con = srv.Con; type T = Int }]
 
-  extension (char: Characteristic) def read(using con: char.Con): F[char.T]
+  // extension (char: Characteristic)
+  //   def read(using char.Con): F[char.T]
+  //   def write(using char.Con)(data: char.T): F[Unit]
 
-  def tst(d: Device, c2: Characteristic)(using F: Monad[F]) =
-    import cats.implicits.*
+  // def example(d: Device, c2: Characteristic)(using F: Monad[F]) =
+  //   import cats.implicits.*
 
-    d.getService.flatMap { srv =>
-      srv.getCharacteristic.flatMap { char =>
-        d.run(char.read)
-      }
-    }
+  //   d.getService.flatMap { srv =>
+  //     srv.getCharacteristic.flatMap { char =>
+  //       d.connection(char.read)
+  //     }
+  //   }
+
+object BlueZ:
+  import com.github.hypfvieh.bluetooth
+  import bluetooth.wrapper.*
+  import bluetooth.*
+  import cats.implicits.*
+  import cats.effect.implicits.*
+  import scala.jdk.CollectionConverters.*
+
+  def resource[F[_]](using F: Sync[F]): Resource[F, BlueZ[F]] =
+    Resource
+      .make(F.interruptible(DeviceManager.createInstance(false)))(dm =>
+        F.interruptible(dm.closeConnection)
+      )
+      .map(dm =>
+        new BlueZ[F]:
+          val devices: F[Seq[Device]] =
+            F.interruptible(dm.getDevices.asScala.toSeq.asInstanceOf)
+
+          type Device = BluetoothDevice & DeviceBound
+          type Service = BluetoothGattService & DeviceBound
+          type Characteristic = BluetoothGattCharacteristic & DeviceBound & {type T}
+      )
 
 // object BlueZ:
 //   transparent inline def apply[F[_]](using b: BlueZ[F]) = b

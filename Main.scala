@@ -2,7 +2,8 @@ import com.github.hypfvieh.bluetooth.DeviceManager
 import scala.jdk.CollectionConverters.*
 import com.github.hypfvieh.bluetooth.wrapper.BluetoothDevice
 
-@main def tst =
+@main 
+def tst =
   val manager = DeviceManager.createInstance(false)
   val adapter = manager.getAdapter()
   println(adapter)
