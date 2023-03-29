@@ -4,4 +4,5 @@
 //> using lib "co.fs2::fs2-core::3.6.1"
 //> using lib "com.outr::scribe-slf4j::3.11.1"
 //> using lib "com.outr::scribe-cats::3.11.1"
+//> using lib "org.scala-lang.modules::scala-xml::2.1.0"
 //> using option "-Ykind-projector"
