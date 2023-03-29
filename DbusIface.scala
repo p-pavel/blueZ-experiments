@@ -24,11 +24,15 @@ import dbus.interfaces.{Introspectable, DBusInterface}
 
 import org.bluez.Adapter1
 import scala.reflect.ClassTag
+import scala.reflect.TypeTest
+import cats.effect.std.Dispatcher
+import cats.effect.std.Queue
 
 trait DbusIface[F[_]] {}
 
 object DbusIface extends IOApp.Simple:
   import scala.xml.*
+  import fs2.Stream
   private val parserFactory = javax.xml.parsers.SAXParserFactory.newInstance()
   parserFactory.setValidating(false)
   parserFactory.setFeature(
@@ -46,18 +50,46 @@ object DbusIface extends IOApp.Simple:
   opaque type Source = String
   opaque type Path = String
 
-  class DbusIfaceImpl[F[_]: Sync](bus: DBusConnection):
-    opaque type Adapter = Adapter1 //TODO: Adapter can't be used outside of connection
+  class DbusIfaceImpl[F[_]](bus: DBusConnection)(using F: Async[F]):
+    opaque type Adapter =
+      Adapter1 // TODO: Adapter can't be used outside of connection
     private val source = "org.bluez"
     private val bluezPath = "/org/bluez"
-    /**
-     * If name does not exist you will give invalid object
-     */ 
+
+    /** If name does not exist you will give invalid object
+      */
     def adapter(name: String): F[Adapter] =
-      remoteObject[Adapter1]("org.bluez", "/org/bluez/" + name)
+      remoteObject[Adapter1](source, bluezPath + "/" + name)
 
     val adapterNames: F[Seq[String]] =
       findNodes(source, bluezPath)
+
+    def signalStream[T <: DBusSignal: ClassTag] = 
+        class Handler(action: T => Unit) extends AbstractSignalHandlerBase[T]:
+          override def getImplementationClass(): Class[T] =
+            summon[ClassTag[T]].runtimeClass.asInstanceOf
+          override def handle(signal: T): Unit = action(signal)
+
+          def subscribe: F[this.type] =
+            F.delay(bus.addSigHandler(getImplementationClass(), this)).as(this)
+          def unsubscribe: F[Unit] =
+            F.delay(bus.removeSigHandler(getImplementationClass(), this))
+        end Handler
+
+        val subscription: Resource[F, Queue[F, T]] = (
+          Dispatcher.sequential[F],
+          Resource.eval(std.Queue.bounded[F, T](10))
+        ).tupled.flatMap { (dispatcher, queue) =>
+          Resource
+            .make(
+              Handler(queue.offer andThen dispatcher.unsafeRunSync).subscribe
+            )(_.unsubscribe)
+            .as(queue)
+        }
+        Stream.resource(subscription).flatMap(Stream.fromQueueUnterminated(_))
+    end signalStream
+
+
 
     def findNodes(name: Source, path: Path): F[Seq[String]] =
       remoteObject[Introspectable](name, path)
@@ -70,7 +102,7 @@ object DbusIface extends IOApp.Simple:
     def remoteObject[A <: DBusInterface](name: Source, path: Path)(using
         c: ClassTag[A]
     ): F[A] =
-      Sync[F].delay(
+      F.delay(
         bus.getRemoteObject(
           name,
           path,
@@ -81,11 +113,11 @@ object DbusIface extends IOApp.Simple:
 
   end DbusIfaceImpl
 
-  def system[F[_]: Sync]: Resource[F, DbusIfaceImpl[F]] =
+  def system[F[_]: Async]: Resource[F, DbusIfaceImpl[F]] =
     Resource
       .make(
-        Sync[F].interruptible(DBusConnection.getConnection(DBusBusType.SYSTEM))
-      )(bus => Sync[F].interruptible(bus.disconnect()))
+        Sync[F].blocking(DBusConnection.getConnection(DBusBusType.SYSTEM))
+      )(bus => Sync[F].blocking(bus.disconnect()))
       .map(DbusIfaceImpl(_))
 
   def run: IO[Unit] =
@@ -93,7 +125,7 @@ object DbusIface extends IOApp.Simple:
     given log: scribe.Scribe[IO] = scribe.Logger.root.f
     log.info("Starting") *>
       system[IO].use { iface =>
-          log.info("Getting nodes") *>
+        log.info("Getting nodes") *>
           iface.adapterNames
             .flatMap(nodes =>
               log.info("Got nodes") *>
