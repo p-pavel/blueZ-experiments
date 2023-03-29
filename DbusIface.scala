@@ -64,32 +64,30 @@ object DbusIface extends IOApp.Simple:
     val adapterNames: F[Seq[String]] =
       findNodes(source, bluezPath)
 
-    def signalStream[T <: DBusSignal: ClassTag] = 
-        class Handler(action: T => Unit) extends AbstractSignalHandlerBase[T]:
-          override def getImplementationClass(): Class[T] =
-            summon[ClassTag[T]].runtimeClass.asInstanceOf
-          override def handle(signal: T): Unit = action(signal)
+    def signalStream[T <: DBusSignal: ClassTag] =
+      class Handler(action: T => Unit) extends AbstractSignalHandlerBase[T]:
+        override def getImplementationClass(): Class[T] =
+          summon[ClassTag[T]].runtimeClass.asInstanceOf
+        override def handle(signal: T): Unit = action(signal)
 
-          def subscribe: F[this.type] =
-            F.delay(bus.addSigHandler(getImplementationClass(), this)).as(this)
-          def unsubscribe: F[Unit] =
-            F.delay(bus.removeSigHandler(getImplementationClass(), this))
-        end Handler
+        def subscribe: F[this.type] =
+          F.delay(bus.addSigHandler(getImplementationClass(), this)).as(this)
+        def unsubscribe: F[Unit] =
+          F.delay(bus.removeSigHandler(getImplementationClass(), this))
+      end Handler
 
-        val subscription: Resource[F, Queue[F, T]] = (
-          Dispatcher.sequential[F],
-          Resource.eval(std.Queue.bounded[F, T](10))
-        ).tupled.flatMap { (dispatcher, queue) =>
-          Resource
-            .make(
-              Handler(queue.offer andThen dispatcher.unsafeRunSync).subscribe
-            )(_.unsubscribe)
-            .as(queue)
-        }
-        Stream.resource(subscription).flatMap(Stream.fromQueueUnterminated(_))
+      val subscription: Resource[F, Queue[F, T]] = (
+        Dispatcher.sequential[F],
+        Resource.eval(std.Queue.bounded[F, T](10))
+      ).tupled.flatMap { (dispatcher, queue) =>
+        Resource
+          .make(
+            Handler(queue.offer andThen dispatcher.unsafeRunSync).subscribe
+          )(_.unsubscribe)
+          .as(queue)
+      }
+      Stream.resource(subscription).flatMap(Stream.fromQueueUnterminated(_))
     end signalStream
-
-
 
     def findNodes(name: Source, path: Path): F[Seq[String]] =
       remoteObject[Introspectable](name, path)
@@ -125,14 +123,18 @@ object DbusIface extends IOApp.Simple:
     given log: scribe.Scribe[IO] = scribe.Logger.root.f
     log.info("Starting") *>
       system[IO].use { iface =>
-        log.info("Getting nodes") *>
-          iface.adapterNames
-            .flatMap(nodes =>
-              log.info("Got nodes") *>
-                nodes
-                  .map(n => iface.adapter(n).flatMap(a => log.info(a.toString)))
-                  .sequence_
-            )
+        for
+          _ <- log.info("Getting nodes")
+          nodes <- iface.adapterNames
+          _ <- log.info("Got nodes")
+          _ <- nodes
+            .map(n => iface.adapter(n).flatMap(a => log.info(a.toString)))
+            .sequence_
+          _ <- iface.signalStream[PropertiesChanged].evalMap { signal =>
+            log.info(s"Signal: $signal")
+          }.compile.drain
+        yield ()
+
       }
 
 end DbusIface
