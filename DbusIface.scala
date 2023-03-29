@@ -45,7 +45,20 @@ object DbusIface extends IOApp.Simple:
 
   opaque type Source = String
   opaque type Path = String
+
   class DbusIfaceImpl[F[_]: Sync](bus: DBusConnection):
+    opaque type Adapter = Adapter1 //TODO: Adapter can't be used outside of connection
+    private val source = "org.bluez"
+    private val bluezPath = "/org/bluez"
+    /**
+     * If name does not exist you will give invalid object
+     */ 
+    def adapter(name: String): F[Adapter] =
+      remoteObject[Adapter1]("org.bluez", "/org/bluez/" + name)
+
+    val adapterNames: F[Seq[String]] =
+      findNodes(source, bluezPath)
+
     def findNodes(name: Source, path: Path): F[Seq[String]] =
       remoteObject[Introspectable](name, path)
         .map(_.Introspect())
@@ -57,8 +70,13 @@ object DbusIface extends IOApp.Simple:
     def remoteObject[A <: DBusInterface](name: Source, path: Path)(using
         c: ClassTag[A]
     ): F[A] =
-      Sync[F].interruptible(
-        bus.getRemoteObject(name, path, c.runtimeClass.asInstanceOf)
+      Sync[F].delay(
+        bus.getRemoteObject(
+          name,
+          path,
+          c.runtimeClass.asInstanceOf,
+          false /*autostart*/
+        )
       )
 
   end DbusIfaceImpl
@@ -75,21 +93,13 @@ object DbusIface extends IOApp.Simple:
     given log: scribe.Scribe[IO] = scribe.Logger.root.f
     log.info("Starting") *>
       system[IO].use { iface =>
-
-        val source = "org.bluez"
-        val bluezPath = "/org/bluez"
-        log.info("Getting nodes") *>
-          iface
-            .findNodes(source, bluezPath)
+          log.info("Getting nodes") *>
+          iface.adapterNames
             .flatMap(nodes =>
               log.info("Got nodes") *>
                 nodes
-                  .map(n =>
-                    iface
-                      .remoteObject[Adapter1](source, bluezPath + "/" + n)
-                      .flatMap(a => log.info(a.toString))
-                  )
-                  .parSequence_
+                  .map(n => iface.adapter(n).flatMap(a => log.info(a.toString)))
+                  .sequence_
             )
       }
 
