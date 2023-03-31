@@ -11,6 +11,7 @@ import dbus.handlers.{
 }
 import dbus.types.Variant
 import dbus.interfaces.Properties.PropertiesChanged
+import dbus.interfaces.ObjectManager.{InterfacesAdded, InterfacesRemoved}
 import dbus.messages.DBusSignal
 import com.github.hypfvieh.DbusHelper
 import dbus.connections.impl.DBusConnection
@@ -21,18 +22,16 @@ import cats.effect.*
 import cats.effect.implicits.*
 import dbus.connections.impl.DBusConnection.DBusBusType
 import dbus.interfaces.{Introspectable, DBusInterface}
-
 import org.bluez.Adapter1
+
 import scala.reflect.ClassTag
-import scala.reflect.TypeTest
-import cats.effect.std.Dispatcher
-import cats.effect.std.Queue
+import fs2.Stream
+import org.freedesktop.dbus.DBusPath
 
 trait DbusIface[F[_]] {}
 
 object DbusIface extends IOApp.Simple:
   import scala.xml.*
-  import fs2.Stream
   private val parserFactory = javax.xml.parsers.SAXParserFactory.newInstance()
   parserFactory.setValidating(false)
   parserFactory.setFeature(
@@ -43,6 +42,8 @@ object DbusIface extends IOApp.Simple:
     "http://apache.org/xml/features/nonvalidating/load-external-dtd",
     false
   )
+
+
 
   private def parseXML(s: String): Elem =
     XML.loadXML(Source.fromString(s), parserFactory.newSAXParser())
@@ -75,18 +76,15 @@ object DbusIface extends IOApp.Simple:
         def unsubscribe: F[Unit] =
           F.delay(bus.removeSigHandler(getImplementationClass(), this))
       end Handler
+      def mkHandler(action: T => Unit): Resource[F, Handler] =
+        Resource.make(Handler(action).subscribe)(_.unsubscribe)
 
-      val subscription: Resource[F, Queue[F, T]] = (
-        Dispatcher.sequential[F],
-        Resource.eval(std.Queue.bounded[F, T](10))
-      ).tupled.flatMap { (dispatcher, queue) =>
-        Resource
-          .make(
-            Handler(queue.offer andThen dispatcher.unsafeRunSync).subscribe
-          )(_.unsubscribe)
-          .as(queue)
-      }
-      Stream.resource(subscription).flatMap(Stream.fromQueueUnterminated(_))
+      val incomingStreamResource = IncomingStream
+        .resource[F, T](10)
+        .flatMap { in => mkHandler(in.put).as(in.stream) }
+
+      Stream.resource(incomingStreamResource).flatten
+
     end signalStream
 
     def findNodes(name: Source, path: Path): F[Seq[String]] =
@@ -94,6 +92,7 @@ object DbusIface extends IOApp.Simple:
         .map(_.Introspect())
         .map(parseXML)
         .map(xml =>
+          println(xml)
           (xml \ "node").map(_ \@ "name")
         ) // TODO: check multiple nodes
 
@@ -117,22 +116,35 @@ object DbusIface extends IOApp.Simple:
         Sync[F].blocking(DBusConnection.getConnection(DBusBusType.SYSTEM))
       )(bus => Sync[F].blocking(bus.disconnect()))
       .map(DbusIfaceImpl(_))
-
+  type T = dbus.interfaces.ObjectManager
   def run: IO[Unit] =
     import scribe.cats.*
     given log: scribe.Scribe[IO] = scribe.Logger.root.f
     log.info("Starting") *>
       system[IO].use { iface =>
+        def signalStream[T <: DBusSignal: ClassTag] =
+          iface.signalStream[T].evalMap { signal =>
+            log.info(s"Signal: $signal")
+          }
         for
           _ <- log.info("Getting nodes")
           nodes <- iface.adapterNames
           _ <- log.info("Got nodes")
           _ <- nodes
-            .map(n => iface.adapter(n).flatMap(a => log.info(a.toString)))
+            .map(n => iface.adapter(n).flatMap(a => 
+              log.info(a.toString)))
             .sequence_
-          _ <- iface.signalStream[PropertiesChanged].evalMap { signal =>
-            log.info(s"Signal: $signal")
-          }.compile.drain
+          _ <- Stream
+            .emits(
+              Seq(
+                signalStream[PropertiesChanged],
+                signalStream[InterfacesAdded],
+                signalStream[InterfacesRemoved]
+              )
+            )
+            .parJoinUnbounded
+            .compile
+            .drain
         yield ()
 
       }
