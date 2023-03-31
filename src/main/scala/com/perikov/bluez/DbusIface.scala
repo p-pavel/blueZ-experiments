@@ -116,7 +116,6 @@ object DbusIface extends IOApp.Simple:
         Sync[F].blocking(DBusConnection.getConnection(DBusBusType.SYSTEM))
       )(bus => Sync[F].blocking(bus.disconnect()))
       .map(DbusIfaceImpl(_))
-  type T = dbus.interfaces.ObjectManager
   def run: IO[Unit] =
     import scribe.cats.*
     given log: scribe.Scribe[IO] = scribe.Logger.root.f
