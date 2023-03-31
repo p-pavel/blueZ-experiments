@@ -13,6 +13,7 @@ import dbus.connections.impl.DBusConnection
 import DBusConnection.DBusBusType
 import ObjectManager.InterfacesAdded
 
+
 trait SimpleDBus[F[_]]:
   import SimpleDBus.*
   def children(i: Introspectable): F[Seq[Path]]
