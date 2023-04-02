@@ -10,13 +10,13 @@ import fs2.io.net.unixsocket.*
 import fs2.io.net.Socket
 
 /** Primitive SASL authentication for DBus. */
-class DBusSASL[F[_]: Async](using log: Scribe[F]):
+class DBusSASL[F[_]: Monad](using log: Scribe[F]):
   import log.*
 
   import fs2.Chunk
   private def toHex(n: Int): String =
     n.toString.getBytes.map(_.toInt.toHexString).mkString
-    
+
   type Error = String
   def authenticate(sock: Socket[F], uid: Int): F[Option[Error]] =
     def sendString(s: String) =

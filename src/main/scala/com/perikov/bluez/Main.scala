@@ -1,5 +1,3 @@
-
-
 import scala.jdk.CollectionConverters.*
 
 import com.github.hypfvieh.bluetooth
@@ -25,12 +23,6 @@ import cats.effect.implicits.*
 import org.freedesktop.dbus.connections.impl.DBusConnection.DBusBusType
 import org.freedesktop.dbus.interfaces.Introspectable
 
-
-
-
-
-    
-
 @main
 def notifications =
   val manager = DeviceManager.createInstance(false)
@@ -50,7 +42,6 @@ def notifications =
 
   manager.scanForBluetoothDevices(5000)
   manager.getDevices().asScala.head.connect()
-
 
 @main
 def tst =
@@ -73,7 +64,7 @@ def tst =
     val start = System.nanoTime()
     val conRes = device.connect()
 
-    // println(s"Connected to ${device.getName()}: $conRes")
+    println(s"Connected to ${device.getName()}: $conRes")
     // val servies = device.getGattServices().asScala
     // servies.foreach(svc => println(s"Service: ${svc.getUuid.toString()}"))
     val ledTextService =
@@ -92,10 +83,7 @@ def tst =
     val stop = System.nanoTime()
     println(s"Took: ${(stop - start) / 1000000} ms")
 
-
-
     textCharacteristic.writeValue("I did it!".getBytes, Map.empty.asJava)
-
 
     device.disconnect()
     println(s"Disconnected from ${device.getName}")

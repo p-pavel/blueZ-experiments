@@ -6,13 +6,17 @@ import cats.implicits.*
 import scala.reflect.ClassTag
 
 import org.freedesktop.dbus
-import dbus.interfaces.{DBusInterface, DBusSigHandler, Introspectable, ObjectManager}
+import dbus.interfaces.{
+  DBusInterface,
+  DBusSigHandler,
+  Introspectable,
+  ObjectManager
+}
 import dbus.handlers.AbstractSignalHandlerBase
 import dbus.messages.DBusSignal
 import dbus.connections.impl.DBusConnection
 import DBusConnection.DBusBusType
 import ObjectManager.InterfacesAdded
-
 
 trait SimpleDBus[F[_]]:
   import SimpleDBus.*
@@ -32,10 +36,10 @@ extension (i: Introspectable)
 
 object SimpleDBus:
   import scala.util.matching.*
-  //TODO: checks for names: https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-names
+  // TODO: checks for names: https://dbus.freedesktop.org/doc/dbus-specification.html#message-protocol-names
   opaque type Source = String
   object Source:
-    def fromString(s: String): Either[String, Source] = 
+    def fromString(s: String): Either[String, Source] =
       if s.isEmpty then Left("Source can't be empty")
       else Right(s)
 
@@ -46,7 +50,6 @@ object SimpleDBus:
       else Right(s)
 
     extension (p: Path) def /(s: String): Path = s"$p/$s" // TODO check string
-
 
   def system[F[_]](using F: Async[F]): Resource[F, SimpleDBus[F]] =
     Resource
